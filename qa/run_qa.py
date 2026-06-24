@@ -70,7 +70,7 @@ def run() -> dict:
 
 
 def _frontend_report(html: str) -> dict:
-    required = ["三源聚合 RAG 控制台", "中文问题", "答案", "答案来源", "后台 JSON 输出"]
+    required = ["三源聚合 RAG 控制台", "中文问题", "答案", "答案来源", "后台 JSON 输出", "命中段：", "概括："]
     missing = [text for text in required if text not in html]
     placeholders = [token for token in PLACEHOLDERS if token.lower() in html.lower()]
     viewports = [

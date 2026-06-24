@@ -1,29 +1,82 @@
-# 01 - Mining RAG Pipeline MVP
+# Mining RAG Pipeline Console
 
-对应题 #1：矿业新闻 + 关键矿产政策 + 价格三源聚合管线。
+Industry-facing RAG question-answering tool for mining news, critical-minerals policy and price evidence. The app ingests public/fixture sources, deduplicates and chunks documents, builds a local retrieval index, then answers Chinese industry questions with numbered evidence citations.
 
-这个 MVP 的目标是 5 分钟可跑通：
+This repository is project 01 from the mining interview MVP set. It is intentionally standalone: no shared backend, no shared database and no dependency on the other interview projects.
 
-1. 采集真实公开源，失败或数量不足时自动使用 fixture 补齐。
-2. 清洗、去重、分块并写入本地检索索引。
-3. 提供 FastAPI `/query` 自然语言查询接口，返回中文答案、编号引用和结构化来源。
-4. 内置 20 条 ground truth Q&A，输出 `recall@5` 和 faithfulness。
+## What It Does
 
-运行：
+- Collects three evidence types: mining news, policy/regulatory notes and commodity price fixtures.
+- Falls back to `data/fixtures` when public sources are unavailable, with `source_mode` and `warnings` exposed in every response.
+- Parses common mining questions by commodity, region, intent and time window.
+- Retrieves and filters evidence by source priority, so price questions prefer price evidence and policy questions prefer policy evidence.
+- Uses a model, when configured, to synthesize the final Chinese answer from retrieved evidence and to write citation-specific Chinese summaries.
+- Falls back to deterministic Chinese output when no model key is provided, so the demo still runs offline.
+- Provides a FastAPI API, Web console, pytest suite, QA suite and Docker Compose entrypoint.
+
+## Answer Format
+
+The business-facing answer is designed for auditability:
+
+```text
+结论：... [1][2]
+关键依据：... [1]
+风险/限制：... [3]
+下一步建议：...
+```
+
+Each citation is rendered as:
+
+```text
+1 - 原文标题
+命中段：English source sentence or paragraph
+概括：中文概括，由模型基于该条命中段和问题生成
+链接：https://...
+```
+
+Debug terms such as keyword hits and relevance scores are kept in the folded Raw JSON output only.
+
+## Quick Start
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 make demo
+make serve
+```
+
+Open `http://localhost:8001`.
+
+Docker:
+
+```bash
 docker compose up --build
 ```
 
-可视化控制台：
+## Model Configuration
+
+The app reads model settings from environment variables only. Do not commit real keys.
 
 ```bash
-make serve
-# open http://localhost:8001
+export MODEL_API_KEY=your_key
+export MODEL_BASE_URL=https://apihub.agnes-ai.com/v1
+export MODEL_NAME=agnes-2.0-flash
 ```
 
-行业级验收：
+When `MODEL_API_KEY` is present, `/query` uses the configured OpenAI-compatible chat endpoint to generate the Chinese answer and citation summaries. Without a key, the deterministic fallback remains runnable for interviews and CI.
+
+## API Example
+
+```bash
+curl -s http://localhost:8001/query \
+  -H 'content-type: application/json' \
+  -d '{"question":"近 7 天澳洲锂出口价格有何变化?","top_k":5,"days":7}' | jq
+```
+
+Stable response fields include `status`, `warnings`, `source_mode`, `elapsed_ms`, `data_quality`, `intent`, `answer`, `answer_points`, `citations` and `hits`.
+
+## QA And Packaging
 
 ```bash
 make test
@@ -31,28 +84,8 @@ make qa
 make package
 ```
 
-API 输出包含稳定字段：`status`、`warnings`、`source_mode`、`elapsed_ms`、`data_quality`，并新增：
+`make qa` runs industry generalization cases for lithium, copper, nickel, zinc, iron ore, rare earth and cobalt across common regions. `make package` creates `/Users/Zhuanz/Desktop/01-mining-rag-pipeline-tool.zip`.
 
-- `intent`: 轻量问题解析结果，包含矿种、地区、问题类型、时间范围。
-- `answer_points`: 中文关键判断，每条带 `citation_ids`。
-- `citations`: 答案来源顺序，包含原文标题、英文命中段、中文概括和链接。
+## Boundaries
 
-业务答案不会展示“命中关键词 / relevance”等调试语；这些只保留在折叠 Raw JSON。价格问题优先引用价格源，政策问题优先引用政策源。证据不足或未加载地区/矿种时返回 `limited` / `abstain`，不会硬凑答案。
-
-可选模型增强：
-
-```bash
-cp .env.example .env
-export APIMART_API_KEY=...
-export APIMART_MODEL=gemini-3.5-flash
-```
-
-有 APIMart key 时使用 Gemini 生成中文答案；无 key 或模型失败时使用确定性 fallback，demo 仍可运行。真实密钥不得写入项目文件或 zip。
-
-API 示例：
-
-```bash
-curl -s http://localhost:8001/query \
-  -H 'content-type: application/json' \
-  -d '{"question":"近 7 天澳洲锂出口价格有何变化?","top_k":5,"days":7}' | jq
-```
+This is a complete MVP, not a production market-data platform. It does not bypass login walls or paid data sources. Evidence gaps are returned as `limited` or `abstain` with explicit warnings instead of fabricated answers.

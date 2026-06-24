@@ -136,7 +136,7 @@ def _build_citations(hits: list[dict], intent: QueryIntent) -> list[dict]:
                 "id": idx,
                 "title": meta.get("title", "Untitled source"),
                 "matched_excerpt_en": excerpt,
-                "summary_zh": _summarize_excerpt_zh(excerpt, intent, meta),
+                "summary_zh": _summarize_excerpt_zh(excerpt, intent, meta, idx),
                 "url": meta.get("url", ""),
                 "source_type": meta.get("source_type", "unknown"),
                 "published_at": meta.get("published_at", ""),
@@ -150,19 +150,125 @@ def _compose_answer(question: str, intent: QueryIntent, citations: list[dict], s
     model = model_metadata()
     if status in {"ok", "limited"} and citations:
         model_payload = complete_json(
-            "你是矿业行业 RAG 问答助手。只允许基于 citations 回答中文。每个关键判断后必须使用 [数字] 引用。输出 JSON: answer:string, answer_points:list。",
+            (
+                "你是矿业行业 RAG 问答助手。你只能基于 citations 中的原文命中段进行中文回答，"
+                "不能编造 citations 之外的事实。回答要先给结论，再给关键依据、风险/限制、下一步建议；"
+                "每个关键判断后必须使用 [数字] 引用，数字必须对应 citations 的 id。"
+                "如果证据有限，要直接说明缺什么证据，不要硬凑。"
+                "同时为每条 citation 生成不同的中文概括，概括必须根据该条命中段和问题思考得出，不能套用同一句模板。"
+                "输出 JSON 字段：answer:string, answer_points:list, citation_summaries:list。"
+                "citation_summaries 每项格式为 {id:number, summary_zh:string}。"
+            ),
             {
                 "question": question,
                 "intent": intent.to_dict(),
                 "status": status,
                 "warnings": warnings,
-                "citations": citations,
+                "citations": _citations_for_model(citations),
             },
         )
         if _valid_model_answer(model_payload, citations):
-            return {"answer": model_payload["answer"], "answer_points": model_payload["answer_points"], "model": model}
+            _apply_model_citation_summaries(model_payload, citations)
+            answer_points = _normalize_model_points(model_payload, citations)
+            answer = _normalize_model_answer(model_payload["answer"], answer_points, citations, intent, warnings)
+            return {"answer": answer, "answer_points": answer_points, "model": model}
     answer, points = _fallback_answer(question, intent, citations, status, warnings)
     return {"answer": answer, "answer_points": points, "model": model}
+
+
+def _citations_for_model(citations: list[dict]) -> list[dict]:
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "matched_excerpt_en": row["matched_excerpt_en"],
+            "url": row["url"],
+            "source_type": row["source_type"],
+            "published_at": row["published_at"],
+            "source": row["source"],
+        }
+        for row in citations
+    ]
+
+
+def _apply_model_citation_summaries(payload: dict, citations: list[dict]) -> None:
+    summaries = payload.get("citation_summaries")
+    if not isinstance(summaries, list):
+        return
+    by_id = {}
+    for row in summaries:
+        if not isinstance(row, dict):
+            continue
+        try:
+            citation_id = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        summary = row.get("summary_zh")
+        if isinstance(summary, str) and summary.strip():
+            by_id[citation_id] = summary.strip()
+    for citation in citations:
+        if citation["id"] in by_id:
+            citation["summary_zh"] = by_id[citation["id"]]
+
+
+def _normalize_model_points(payload: dict, citations: list[dict]) -> list[dict]:
+    citation_ids = {row["id"] for row in citations}
+    rows = []
+    for point in payload.get("answer_points", []):
+        if isinstance(point, dict):
+            text = str(point.get("text", "")).strip()
+            raw_ids = point.get("citation_ids", [])
+            if not isinstance(raw_ids, list):
+                raw_ids = []
+        else:
+            text = str(point).strip()
+            raw_ids = re.findall(r"\[(\d+)\]", text)
+        ids = []
+        for raw_id in raw_ids:
+            try:
+                citation_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if citation_id in citation_ids and citation_id not in ids:
+                ids.append(citation_id)
+        if text:
+            rows.append({"text": text, "citation_ids": ids, "confidence": "medium"})
+    return rows
+
+
+def _normalize_model_answer(answer: str, answer_points: list[dict], citations: list[dict], intent: QueryIntent, warnings: list[str]) -> str:
+    text = answer.strip()
+    citation_ids = {row["id"] for row in citations}
+    used = _used_citation_ids(text)
+    if {"结论：", "关键依据："}.issubset(text) and used and used.issubset(citation_ids):
+        return text
+    point_ids = _point_citation_ids(answer_points)
+    if not point_ids:
+        point_ids = [row["id"] for row in citations[:2]]
+    conclusion_ids = point_ids[: min(2, len(point_ids))]
+    basis_lines = [row["text"] for row in answer_points[:2] if row.get("text")]
+    basis = "；".join(basis_lines) if basis_lines else f"模型基于“{citations[0]['title']}”等来源形成判断"
+    risk = "；".join(warnings) if warnings else "当前结论仅基于已检索公开/样例来源，正式决策仍需授权行情源和原文公告复核"
+    risk_ids = [point_ids[-1]] if point_ids else [citations[-1]["id"]]
+    return (
+        f"结论：{text.rstrip('。')} {_cite(conclusion_ids)}\n"
+        f"关键依据：{basis}\n"
+        f"风险/限制：{risk} {_cite(risk_ids)}\n"
+        f"下一步建议：{_next_step(intent, warnings)}"
+    )
+
+
+def _point_citation_ids(answer_points: list[dict]) -> list[int]:
+    ids: list[int] = []
+    for point in answer_points:
+        for citation_id in point.get("citation_ids", []):
+            if citation_id not in ids:
+                ids.append(citation_id)
+    return ids
+
+
+def _used_citation_ids(text: str) -> set[int]:
+    return {int(match) for match in re.findall(r"\[(\d+)\]", text)}
 
 
 def _fallback_answer(question: str, intent: QueryIntent, citations: list[dict], status: str, warnings: list[str]) -> tuple[str, list[dict]]:
@@ -276,16 +382,47 @@ def _best_excerpt(text: str, intent: QueryIntent) -> str:
     return best[:520].strip()
 
 
-def _summarize_excerpt_zh(excerpt: str, intent: QueryIntent, meta: dict) -> str:
+def _summarize_excerpt_zh(excerpt: str, intent: QueryIntent, meta: dict, citation_id: int = 1) -> str:
     subject = _subject(intent)
     source_type = _source_type_label(meta.get("source_type", "unknown"))
+    title = meta.get("title", "该来源")
+    focus = _excerpt_focus(excerpt)
     if intent.intent == "price":
-        return f"该{source_type}证据用于判断{subject}的价格方向、库存/需求或供应扰动。"
+        variants = [
+            f"该{source_type}来源显示{focus}，可用于判断{subject}价格变化是否有直接行情依据。",
+            f"这条证据来自“{title}”，重点是{focus}，更适合支持价格方向或库存/需求解释。",
+            f"该命中段说明{focus}，但仍需区分其是否直接覆盖{subject}的目标地区和出口口径。",
+        ]
+        return variants[(citation_id - 1) % len(variants)]
     if intent.intent == "policy":
-        return f"该{source_type}证据说明{subject}相关政策、审批、配额或下游加工要求。"
+        variants = [
+            f"该{source_type}来源围绕{focus}，用于判断{subject}政策或监管变化。",
+            f"这条来源强调{focus}，可作为审批、配额、追溯或下游加工政策的依据。",
+            f"该命中段把{focus}与政策执行背景联系起来，适合用于解释监管影响。",
+        ]
+        return variants[(citation_id - 1) % len(variants)]
     if intent.intent == "supply_risk":
-        return f"该{source_type}证据说明{subject}面临的供应、出货、维护或合规风险。"
-    return f"该{source_type}证据为{subject}问题提供背景和可追溯依据。"
+        variants = [
+            f"该{source_type}来源指出{focus}，用于识别{subject}的供应或出货风险。",
+            f"这条证据把{focus}作为风险线索，可用于判断维护、物流或合规约束。",
+            f"该命中段体现{focus}，适合作为供应链扰动的可追溯依据。",
+        ]
+        return variants[(citation_id - 1) % len(variants)]
+    return f"该{source_type}证据提到{focus}，为{subject}问题提供背景和可追溯依据。"
+
+
+def _excerpt_focus(excerpt: str) -> str:
+    text = excerpt.strip().rstrip(".")
+    lowered = text.lower()
+    if "price" in lowered or "lme" in lowered or "shfe" in lowered:
+        return "价格、库存或交易所趋势信号"
+    if "policy" in lowered or "quota" in lowered or "permit" in lowered or "traceability" in lowered:
+        return "政策、审批或追溯要求"
+    if "shipment" in lowered or "port" in lowered or "maintenance" in lowered or "community" in lowered:
+        return "出货、维护或社区许可风险"
+    if len(text) > 90:
+        text = text[:87].rstrip() + "..."
+    return text or "原文中的关键事实"
 
 
 def _source_reliability(meta: dict) -> str:
@@ -335,7 +472,19 @@ def _valid_model_answer(payload: dict | None, citations: list[dict]) -> bool:
     citation_ids = {row["id"] for row in citations}
     if not isinstance(answer, str) or not isinstance(points, list):
         return False
-    used = {int(match) for match in re.findall(r"\[(\d+)\]", answer)}
+    used = _used_citation_ids(answer)
+    for point in points:
+        if isinstance(point, dict):
+            raw_ids = point.get("citation_ids", [])
+            if isinstance(raw_ids, list):
+                for raw_id in raw_ids:
+                    try:
+                        used.add(int(raw_id))
+                    except (TypeError, ValueError):
+                        continue
+            used.update(_used_citation_ids(str(point.get("text", ""))))
+        else:
+            used.update(_used_citation_ids(str(point)))
     return bool(used) and used.issubset(citation_ids)
 
 

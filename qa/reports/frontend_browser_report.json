@@ -2,31 +2,50 @@
   "tool": "01-mining-rag-pipeline",
   "url": "http://127.0.0.1:8001/",
   "status": "passed",
-  "tested_at": "2026-06-23",
+  "tested_at": "2026-06-24",
   "checks": {
+    "live_model_provider": "agnes-ai",
+    "live_model_mode": "live",
     "answer_default_open": true,
     "sources_default_collapsed": true,
     "raw_json_default_collapsed": true,
     "chinese_query_returns_chinese_answer": true,
+    "model_answer_identifies_evidence_gap": true,
     "answer_uses_numbered_citations": true,
+    "sources_use_requested_labels": true,
+    "old_source_labels_absent": true,
+    "citation_summaries_unique": true,
     "business_answer_has_no_debug_relevance_terms": true,
-    "sources_include_title_excerpt_summary_link": true,
-    "abstain_path_returns_chinese_warning": true,
-    "raw_output_is_structured_backend_json": true,
-    "buttons_enabled_after_actions": true,
     "placeholder_tokens": [],
-    "horizontal_overflow": false
+    "horizontal_overflow_default_viewport": false
   },
   "viewports": [
-    {"width": 1280, "height": 720, "horizontal_overflow": false},
-    {"width": 768, "height": 900, "horizontal_overflow": false},
-    {"width": 390, "height": 844, "horizontal_overflow": false}
+    {
+      "width": 1280,
+      "height": 720,
+      "checked": "browser",
+      "horizontal_overflow": false
+    },
+    {
+      "width": 768,
+      "height": 900,
+      "checked": "qa_static_and_css",
+      "note": "in-app browser viewport override returned 1280 width for this tab; CSS/QA responsive checks passed"
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "checked": "qa_static_and_css",
+      "note": "in-app browser viewport override returned 1280 width for this tab; CSS/QA responsive checks passed"
+    }
   ],
   "interactions": [
-    "Loaded console and verified details state.",
-    "Ran Australia lithium price query and verified numbered citations.",
-    "Expanded Answer Sources and verified title, English excerpt, Chinese summary and link.",
-    "Ran DRC cobalt query and verified abstain / evidence-insufficient path.",
-    "Verified buttons returned to enabled state."
+    "Loaded console and verified Answer open, Answer Sources collapsed, Raw JSON collapsed.",
+    "Submitted Chinese lithium export price query against live Agnes/APIHub model.",
+    "Verified response model_provider=agnes-ai and model_mode=live in Raw JSON.",
+    "Verified answer cites [1][2] and explicitly states missing direct Australia export-price evidence.",
+    "Verified citation cards use labels: 命中段, 概括, 链接.",
+    "Verified five visible citation summaries were unique.",
+    "Verified no old labels 英文命中句/中文简要概括 and no debug relevance terms in business answer."
   ]
 }

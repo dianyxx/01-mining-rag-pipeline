@@ -7,9 +7,9 @@ services:
       - ./data:/app/data
     environment:
       - PYTHONPATH=/app
-      - APIMART_API_KEY=${APIMART_API_KEY:-}
-      - APIMART_BASE_URL=${APIMART_BASE_URL:-https://api.apimart.ai/v1}
-      - APIMART_MODEL=${APIMART_MODEL:-gemini-3.5-flash}
+      - MODEL_API_KEY=${MODEL_API_KEY:-}
+      - MODEL_BASE_URL=${MODEL_BASE_URL:-https://apihub.agnes-ai.com/v1}
+      - MODEL_NAME=${MODEL_NAME:-agnes-2.0-flash}
     command: >
       sh -c "python -m pipeline.ingest --out data/runtime --per-source 200 --fixture &&
              uvicorn serve.app:app --host 0.0.0.0 --port 8001"

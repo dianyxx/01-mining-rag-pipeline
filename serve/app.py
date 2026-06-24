@@ -219,7 +219,7 @@ CONSOLE_HTML = """
         const statusText = data.status === 'ok' ? '可回答' : data.status === 'limited' ? '证据有限' : '证据不足';
         answer.textContent = `状态：${statusText}\n\n${data.answer}`;
         hits.innerHTML = data.citations && data.citations.length ? data.citations.map((c) => {
-          return `<div class="hit"><b>${c.id} - ${escapeHtml(c.title)}</b><div class="muted">${c.source_type} · ${c.source} · ${c.published_at}</div><div class="excerpt">英文命中句或命中段：${escapeHtml(c.matched_excerpt_en)}</div><div class="summary">中文简要概括：${escapeHtml(c.summary_zh)}</div><div class="muted">链接：${escapeHtml(c.url)}</div></div>`;
+          return `<div class="hit"><b>${c.id} - ${escapeHtml(c.title)}</b><div class="excerpt">命中段：${escapeHtml(c.matched_excerpt_en)}</div><div class="summary">概括：${escapeHtml(c.summary_zh)}</div><div class="muted">链接：${escapeHtml(c.url)}</div></div>`;
         }).join('') : '<div class="muted">没有达到相关性门槛的来源。请补充对应数据源或扩大范围。</div>';
         raw.textContent = JSON.stringify(data, null, 2);
       } finally {
